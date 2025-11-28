@@ -1,0 +1,221 @@
+Start Server (server.js)
+BEGIN SERVER
+    LOAD environment variables
+    IMPORT Express, CORS, database connection, Clerk auth middleware
+    IMPORT Stripe webhook handler
+    IMPORT route modules (admin, user, show, booking, chatbot)
+
+    CONNECT to database
+
+    // Stripe webhook must receive raw body
+    REGISTER route /api/stripe with raw body and webhook handler
+
+    ENABLE JSON parsing
+    ENABLE CORS
+    ENABLE Clerk authentication middleware
+
+    DEFINE GET / → return "Server is live"
+
+    REGISTER Inngest workflow route
+    REGISTER /api/admin routes
+    REGISTER /api/show routes
+    REGISTER /api/bookings routes
+    REGISTER /api/user routes
+    REGISTER /api/chatbot routes
+
+    START listening on port 3000
+END SERVER
+
+protectAdmin()
+FUNCTION protectAdmin(request):
+    EXTRACT userId from Clerk authentication
+    FETCH user profile from Clerk
+    IF user.role IS NOT 'admin'
+        RETURN "Not authorized"
+    ELSE
+        ALLOW request to continue
+END FUNCTION
+
+ensureAuth()
+FUNCTION ensureAuth(request):
+    EXTRACT userId from Clerk
+    IF userId does NOT exist:
+        RETURN "Not authorized"
+
+    FETCH user profile from Clerk
+    CREATE or UPDATE user in database using Clerk profile
+    ALLOW request to continue
+END FUNCTION
+
+Check Admin
+IF request is from admin:
+    RETURN { isAdmin: true }
+
+Get Dashboard Data
+FUNCTION getDashboardData():
+    FETCH all bookings
+
+    FILTER bookings where isPaid = true → paidBookings
+
+    CALCULATE:
+        totalRevenue = sum of amounts in paid bookings
+        totalBookings = count of all bookings
+        totalAdults = sum of numberOfAdults across bookings
+        totalChildren = sum of numberOfKids
+
+    RETURN stats to admin
+END FUNCTION
+
+User Routes (Favorites System)
+BEGIN FAVORITES MODULE
+    FOR each user:
+        STORE favorite shows in memory (Map)
+
+    GET /favorites:
+        FETCH favorite show IDs for user
+        RETURN matching show details
+
+    POST /favorites/:id:
+        TOGGLE favorite:
+            IF show is already favorite → remove it
+            ELSE → add it
+        SAVE to memory map
+        RETURN success
+END MODULE
+
+Get Now Playing
+RETURN list of shows taken from asset file
+
+Add Shows for Museum
+FUNCTION addShowsForMuseum(movieId, showPrice, showsInput):
+    VALIDATE input
+
+    FIND movie asset by ID
+    UPSERT museum details into database
+
+    FOR each date entry:
+        FOR each time in entry:
+            CONVERT date + time into valid ISO timestamp
+            ADD document:
+                museumId, showDate, price
+
+    INSERT all show documents into Show collection
+    RETURN number of created show entries
+END FUNCTION
+
+Get Public Shows
+FETCH all shows
+EXTRACT unique museum IDs
+RETURN museum details for those IDs
+
+Get Show Details
+FETCH museum (from DB or asset fallback)
+FETCH all shows for museum
+
+GROUP shows by date:
+    date → list of times, showId, price
+
+RETURN museum details + date/time structure
+
+Get Times for Specific Date
+RECEIVE museumId and date
+CALCULATE dayStart and dayEnd
+
+FETCH all shows for museum BETWEEN dayStart and dayEnd
+
+RETURN available times
+
+Create Booking
+FUNCTION createBooking(userId, showId, adults, kids):
+    FETCH show data
+    CALCULATE total amount = price * (adults + kids)
+
+    CREATE booking record:
+        user, show, amount, adults, kids
+        reviewRequested = true
+
+    CREATE Stripe Checkout Session:
+        success URL = /my-bookings
+        cancel URL = /my-bookings
+        STORE session.url as booking.paymentLink
+
+    SAVE booking
+
+    RETURN Stripe payment URL
+END FUNCTION
+
+Get User's Bookings
+FETCH bookings where booking.user = current user
+SORT by newest first
+RETURN results
+
+Admin: Get All Bookings
+ADMIN FETCHES all bookings sorted by latest
+RETURN bookings
+
+Review Submission Flow
+GET /pending-reviews:
+    FIND bookings for user where reviewRequested = true AND reviewSubmitted = false
+    RETURN one pending review if exists
+
+POST /submit-review:
+    VALIDATE booking belongs to user
+    IF review already submitted:
+        RETURN error
+    UPDATE booking with review text + rating + reviewSubmitted = true
+    RETURN thank you message
+
+Stripe Webhooks (stripWebhooks.js)
+ON Webhook "payment_intent.succeeded":
+    EXTRACT paymentIntent
+    FIND corresponding checkout session
+    READ bookingId from metadata
+
+    UPDATE booking:
+        isPaid = true
+        paymentLink = ""
+        reviewRequested = true
+
+RETURN { received: true }
+
+Chat With Bot
+FUNCTION chatWithBot(message, userId, conversationId):
+    SELECT conversation history (last 10 messages)
+    SEND message + history to AI agent
+    RECEIVE AI response
+
+    APPEND user + assistant messages to history
+    SAVE updated history
+
+    RETURN AI response + optional bookingActions
+END FUNCTION
+
+Chatbot Booking Processing
+FUNCTION processBooking(showTitle, adults, children, date, userId):
+    USE AI agent's booking tool:
+        Find show by title
+        Validate date availability
+        Perform booking logic (similar to createBooking)
+    RETURN bookingId + amount + details
+END FUNCTION
+
+
+User
+FIELDS: id, name, email, image
+
+Booking
+FIELDS:
+    user, show, amount,
+    adults, children, isPaid,
+    paymentLink, reviewRequested,
+    reviewSubmitted, review, rating
+
+Show
+FIELDS:
+    museumId, showDate, showPrice
+
+Museum
+FIELDS:
+    id, title, overview, poster, backdrop,
+    genres, start_date, end_date,
+    venue, ticket_price_adult, ticket_price_kid, rating
